@@ -13,10 +13,12 @@ namespace RabbitCore.Configuration
 {
     public class RabbitConfiguration
     {
-        readonly static ConnectionFactory factory = new ConnectionFactory() { HostName = "localhost", VirtualHost = "Booking_Test_ES" };
+        readonly static ConnectionFactory factory = new ConnectionFactory() { HostName = "localhost", VirtualHost = "Booking_Test_Burgos" };
         public static IConnection connection;
         public static IModel channel;
         private static readonly Dictionary<string, Type> handlersDictionary = new Dictionary<string, Type>();
+        private const string deadLetterPrefix = "DeadLetter";
+        private const int maxNumRetries = 5;
         public void Configure(string serviceName)
         {
             if (serviceName == null)
@@ -36,12 +38,31 @@ namespace RabbitCore.Configuration
 
         private void CreateEndpoints(string serviceName)
         {
+            //Create DeadLetter exhanges to implement retries
+            var deadLetterName = $"{ deadLetterPrefix }.{ serviceName }";
+            channel.ExchangeDeclare(deadLetterName, ExchangeType.Fanout);
+            Dictionary<string, object> args = new Dictionary<string, object>
+            {
+                { "x-dead-letter-exchange", deadLetterName },
+                { "x-dead-letter-routing-key", deadLetterName },
+                { "x-message-ttl", 3000 }//if message is not processed in this TTL it will go to the dead letter 
+            };
+            channel.QueueDeclare(queue: deadLetterName,
+                                 durable: true,
+                                 exclusive: false,
+                                 autoDelete: false,
+                                 arguments: null);
+            channel.QueueBind(queue: deadLetterName,
+              exchange: deadLetterName,
+              routingKey: "");
+
+            //Create exchange and binded queue for service
             channel.ExchangeDeclare(serviceName, ExchangeType.Fanout);
             channel.QueueDeclare(queue: serviceName,
                                  durable: true,
                                  exclusive: false,
                                  autoDelete: false,
-                                 arguments: null);
+                                 arguments: args);
             channel.QueueBind(queue: serviceName,
               exchange: serviceName,
               routingKey: "");
@@ -100,7 +121,7 @@ namespace RabbitCore.Configuration
                     var consumer = new EventingBasicConsumer(channel);
                     consumer.Received += (model, eventArgs) =>
                     {
-                        this.ResolveHandlerAndExecute(eventArgs);
+                        this.ResolveHandlerAndExecute(eventArgs, serviceName);
 
                         channel.BasicAck(deliveryTag: eventArgs.DeliveryTag, multiple: false);
                     };
@@ -108,16 +129,21 @@ namespace RabbitCore.Configuration
                                      autoAck: false,
                                      consumerTag: $"{ Environment.MachineName }({ Dns.GetHostAddresses(Environment.MachineName)[0] }).{messageType.Name}",
                                      consumer: consumer);
-
                 }
             }
         }
 
-        private void ResolveHandlerAndExecute(BasicDeliverEventArgs eventArgs)
+        private void ResolveHandlerAndExecute(BasicDeliverEventArgs eventArgs, string serviceName)
         {
             //CHECK HEADERS TO SEE WHICH HANDLER WE SHOULD RESOLVE AND EXECUTE
             var handledMessageNameBytes = (byte[])eventArgs.BasicProperties.Headers[BusConstants.Header.MessageName];
             var handledMessageName = Encoding.UTF8.GetString(handledMessageNameBytes);
+
+            //RETRIES
+            if(!eventArgs.BasicProperties.Headers.ContainsKey(BusConstants.Header.RetryCount))
+            {
+                eventArgs.BasicProperties.Headers.Add(BusConstants.Header.RetryCount, 0);
+            }
 
             handlersDictionary.TryGetValue(handledMessageName.ToString(), out Type registeredHandlerType);
 
@@ -129,11 +155,8 @@ namespace RabbitCore.Configuration
             MethodInfo methodInfo = registeredHandlerType.GetMethod(BusConstants.Handlers.HandlerMethod);
             if (methodInfo != null)
             {
-                object result = null;
                 ParameterInfo[] parameters = methodInfo.GetParameters();
                 object handlerInstance = Activator.CreateInstance(registeredHandlerType, null);
-
-
 
                 if (parameters.Length == 0 || parameters.Length > 1)
                 {
@@ -146,8 +169,28 @@ namespace RabbitCore.Configuration
                     var deserializedMessageToBeHandled = JsonConvert.DeserializeObject(message, parameters[0].ParameterType);
                     object[] parametersArray = new object[] { deserializedMessageToBeHandled };
 
-
-                    result = methodInfo.Invoke(handlerInstance, parametersArray);
+                    try
+                    {
+                        methodInfo.Invoke(handlerInstance, parametersArray);
+                    }
+                    catch(Exception ex)
+                    {
+                        //RETRIES NOT WORKING
+                        var currentNumRetries = int.Parse(eventArgs.BasicProperties.Headers[BusConstants.Header.RetryCount].ToString());
+                        eventArgs.BasicProperties.Headers[BusConstants.Header.RetryCount] = currentNumRetries + 1;
+                        if(currentNumRetries >= maxNumRetries)
+                        {
+                            //this will send the message to the deadletter exchange.
+                            channel.BasicNack(deliveryTag: eventArgs.DeliveryTag, multiple: false, requeue: false);
+                        }
+                        else
+                        {
+                            var jsonBody = JsonConvert.SerializeObject(deserializedMessageToBeHandled);
+                            //NOT WORKING
+                            channel.BasicPublish(serviceName, "", eventArgs.BasicProperties, Encoding.UTF8.GetBytes(jsonBody));
+                        }
+                        //throw ex;
+                    }
                 }
             }
         }

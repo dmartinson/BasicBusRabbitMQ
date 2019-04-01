@@ -8,7 +8,7 @@ namespace RabbitCore.Messages
 {
     public class Publisher
     {
-        ConnectionFactory factory = new ConnectionFactory() { HostName = "localhost", VirtualHost = "Booking_Test_ES" };
+        ConnectionFactory factory = new ConnectionFactory() { HostName = "localhost", VirtualHost = "Booking_Test_Burgos" };
         public void Publish<T>(T message)
         {
             using (var connection = this.factory.CreateConnection())
@@ -52,7 +52,8 @@ namespace RabbitCore.Messages
                     //props.DeliveryMode = 2;
                     props.Headers = new Dictionary<string, object>
                     {
-                        { BusConstants.Header.MessageName, command.GetType().Name }
+                        { BusConstants.Header.MessageName, command.GetType().Name },
+                        { BusConstants.Header.RetryCount, 0 }
                     };
 
                     var body = Encoding.UTF8.GetBytes(jsonBody);

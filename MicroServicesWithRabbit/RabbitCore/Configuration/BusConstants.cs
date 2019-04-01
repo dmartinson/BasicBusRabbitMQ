@@ -4,6 +4,7 @@
     {
         public static class Header {
             public const string MessageName = "messageName";
+            public const string RetryCount = "retryCount";
             public const string JsonContentType = "application/json";
         }
 

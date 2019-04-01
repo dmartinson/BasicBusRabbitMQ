@@ -14,6 +14,11 @@ namespace BookingService.Handlers
         {
             Console.WriteLine($"I received a make Appointment requet for { message.Name } on { message.Date }");
 
+            if(message.Name == "Error")
+            {
+                throw new Exception();
+            }
+
             this.bus = new Publisher();
             if(message.Date < DateTime.Now)
             {
