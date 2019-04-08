@@ -3,8 +3,8 @@
     public static class BusConstants
     {
         public static class Header {
-            public const string MessageName = "messageName";
-            public const string RetryCount = "retryCount";
+            public const string MessageName = "x-message-name";
+            public const string RetryCount = "x-retry-count";
             public const string JsonContentType = "application/json";
         }
 

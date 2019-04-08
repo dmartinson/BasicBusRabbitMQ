@@ -8,6 +8,7 @@ namespace AlertService.Handlers
     {
         public void Handle(AppointmentBooked message)
         {
+            Console.ForegroundColor = ConsoleColor.Blue;
             Console.WriteLine($"I've also heard that an Appointment was booked for { message.Name } on { message.Date }. I will send a reminder to the user.");
         }
     }

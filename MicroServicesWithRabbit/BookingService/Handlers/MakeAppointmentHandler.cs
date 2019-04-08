@@ -12,6 +12,7 @@ namespace BookingService.Handlers
 
         public void Handle(MakeAppointment message)
         {
+            Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"I received a make Appointment requet for { message.Name } on { message.Date }");
 
             if(message.Name == "Error")

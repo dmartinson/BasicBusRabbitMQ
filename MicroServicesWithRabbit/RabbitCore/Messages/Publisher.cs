@@ -8,7 +8,7 @@ namespace RabbitCore.Messages
 {
     public class Publisher
     {
-        ConnectionFactory factory = new ConnectionFactory() { HostName = "localhost", VirtualHost = "Booking_Test_Burgos" };
+        ConnectionFactory factory = new ConnectionFactory() { HostName = "localhost", VirtualHost = "Booking_Test_MX" };
         public void Publish<T>(T message)
         {
             using (var connection = this.factory.CreateConnection())

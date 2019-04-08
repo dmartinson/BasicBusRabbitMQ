@@ -13,7 +13,7 @@ namespace RabbitCore.Configuration
 {
     public class RabbitConfiguration
     {
-        readonly static ConnectionFactory factory = new ConnectionFactory() { HostName = "localhost", VirtualHost = "Booking_Test_Burgos" };
+        readonly static ConnectionFactory factory = new ConnectionFactory() { HostName = "localhost", VirtualHost = "Booking_Test_MX" };
         public static IConnection connection;
         public static IModel channel;
         private static readonly Dictionary<string, Type> handlersDictionary = new Dictionary<string, Type>();
@@ -39,13 +39,13 @@ namespace RabbitCore.Configuration
         private void CreateEndpoints(string serviceName)
         {
             //Create DeadLetter exhanges to implement retries
-            var deadLetterName = $"{ deadLetterPrefix }.{ serviceName }";
+            var deadLetterName = $"{ deadLetterPrefix }.{ serviceName }.error";
             channel.ExchangeDeclare(deadLetterName, ExchangeType.Fanout);
             Dictionary<string, object> args = new Dictionary<string, object>
             {
                 { "x-dead-letter-exchange", deadLetterName },
                 { "x-dead-letter-routing-key", deadLetterName },
-                { "x-message-ttl", 3000 }//if message is not processed in this TTL it will go to the dead letter 
+                { "x-message-ttl", 15000 }//if message is not processed in this TTL it will go to the dead letter 
             };
             channel.QueueDeclare(queue: deadLetterName,
                                  durable: true,
@@ -121,9 +121,10 @@ namespace RabbitCore.Configuration
                     var consumer = new EventingBasicConsumer(channel);
                     consumer.Received += (model, eventArgs) =>
                     {
-                        this.ResolveHandlerAndExecute(eventArgs, serviceName);
-
-                        channel.BasicAck(deliveryTag: eventArgs.DeliveryTag, multiple: false);
+                        if(ResolveHandlerAndExecute(eventArgs, serviceName))
+                        {
+                            channel.BasicAck(deliveryTag: eventArgs.DeliveryTag, multiple: false);
+                        }
                     };
                     channel.BasicConsume(queue: serviceName,
                                      autoAck: false,
@@ -133,7 +134,7 @@ namespace RabbitCore.Configuration
             }
         }
 
-        private void ResolveHandlerAndExecute(BasicDeliverEventArgs eventArgs, string serviceName)
+        private bool ResolveHandlerAndExecute(BasicDeliverEventArgs eventArgs, string serviceName)
         {
             //CHECK HEADERS TO SEE WHICH HANDLER WE SHOULD RESOLVE AND EXECUTE
             var handledMessageNameBytes = (byte[])eventArgs.BasicProperties.Headers[BusConstants.Header.MessageName];
@@ -157,7 +158,7 @@ namespace RabbitCore.Configuration
             {
                 ParameterInfo[] parameters = methodInfo.GetParameters();
                 object handlerInstance = Activator.CreateInstance(registeredHandlerType, null);
-
+                
                 if (parameters.Length == 0 || parameters.Length > 1)
                 {
                     // This works fine
@@ -172,6 +173,7 @@ namespace RabbitCore.Configuration
                     try
                     {
                         methodInfo.Invoke(handlerInstance, parametersArray);
+                        return true;
                     }
                     catch(Exception ex)
                     {
@@ -181,18 +183,20 @@ namespace RabbitCore.Configuration
                         if(currentNumRetries >= maxNumRetries)
                         {
                             //this will send the message to the deadletter exchange.
-                            channel.BasicNack(deliveryTag: eventArgs.DeliveryTag, multiple: false, requeue: false);
+                            channel.BasicReject(deliveryTag: eventArgs.DeliveryTag, requeue: false);
+                            return false;
                         }
                         else
                         {
                             var jsonBody = JsonConvert.SerializeObject(deserializedMessageToBeHandled);
-                            //NOT WORKING
                             channel.BasicPublish(serviceName, "", eventArgs.BasicProperties, Encoding.UTF8.GetBytes(jsonBody));
+                            return true;//We return true here to acknowledge original message
                         }
-                        //throw ex;
                     }
+                    
                 }
             }
+            return false;
         }
     }
 }
